@@ -24,6 +24,7 @@
     "discord.js": "^14.25.1",
     "libsodium-wrappers": "^0.8.2",
     "opusscript": "^0.0.8",
-    "play-dl": "^1.9.7"
+    "play-dl": "^1.9.7",
+    "yt-dlp-exec": "^1.0.2"
   }
 }
