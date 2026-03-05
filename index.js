@@ -109,13 +109,18 @@ client.once('ready', async () => {
                 console.log(`🔇 Bekleme kanalına katıldı: #${channel.name} (Mikrofon açık, kulaklık kapalı)`);
 
                 connection.on(VoiceConnectionStatus.Disconnected, async () => {
+                    // Eğer aktif bir müzik kuyruğu varsa, bekleme kanalına zorla döndürme
+                    if (queue.has(guild.id)) return;
+
                     try {
                         await Promise.race([
                             entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
                             entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                         ]);
                     } catch {
-                        // Yeniden bağlan
+                        // Eğer hala bağlı değilsek ve kuyruk yoksa bekleme kanalına dön
+                        if (queue.has(guild.id)) return;
+
                         console.log('🔄 Bekleme kanalına yeniden bağlanılıyor...');
                         try {
                             joinVoiceChannel({
@@ -188,28 +193,28 @@ async function playSong(guildId, interaction) {
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
-        // Mikrofonu aç (şarkı çalarken)
-        serverQueue.connection.rejoin({
-            ...serverQueue.connection.joinConfig,
-            selfDeaf: false,
-            selfMute: false
-        });
+        // Not: Mikrofon ayarları joinVoiceChannel aşamasında zaten yapıldı.
+        // rejoin() çağırmak bağlantı sorunlarına yol açabildiği için kaldırıldı.
 
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
+            console.log('🎵 Şarkı bitti, sıradakine geçiliyor...');
             serverQueue.songs.shift();
             playSong(guildId, interaction);
         });
 
         serverQueue.player.once('error', error => {
             console.error('❌ Çalma hatası:', error);
+            if (serverQueue.textChannel) {
+                serverQueue.textChannel.send(`❌ Ses çalma hatası: ${error.message}`).catch(() => { });
+            }
             serverQueue.songs.shift();
             playSong(guildId, interaction);
         });
 
     } catch (error) {
         console.error('❌ Stream hatası:', error);
-        if (interaction && !interaction.replied) {
-            interaction.followUp('❌ Bu şarkı çalınamadı, bir sonrakine geçiliyor...').catch(() => { });
+        if (serverQueue.textChannel) {
+            serverQueue.textChannel.send('❌ Bu şarkı çalınamadı (YouTube IP engeli, yaş kısıtlaması veya bağlantı hatası olabilir). Kuyruktaki diğer şarkıya geçiliyor...').catch(() => { });
         }
         serverQueue.songs.shift();
         playSong(guildId, interaction);
@@ -278,7 +283,7 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply(`📝 Kuyruğa eklendi: **${song.title}** (${song.duration})\n📋 Sıra: ${serverQueue.songs.length}`);
             }
 
-            // Yeni kuyruk oluştur
+            // Ses kanalına katıl veya kanalı değiştir
             const connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
                 guildId: guild.id,
@@ -286,6 +291,8 @@ client.on('interactionCreate', async (interaction) => {
                 selfDeaf: false,
                 selfMute: false
             });
+
+            console.log(`🎵 ${voiceChannel.name} kanalında çalmaya başlanıyor...`);
 
             const player = createAudioPlayer();
             const queueData = {
