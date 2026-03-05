@@ -1,6 +1,8 @@
 const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const play = require('play-dl');
+const ytdl = require('yt-dlp-exec');
+const stream = require('stream');
 
 // Railway ortam değişkenlerini doğrudan process.env üzerinden okuyoruz
 // Railway Dashboard > Variables kısmından şu değişkenleri ekleyin:
@@ -180,9 +182,20 @@ async function playSong(guildId, interaction) {
     const song = serverQueue.songs[0];
 
     try {
-        const stream = await play.stream(song.url);
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
+        console.log(`📡 Stream başlatılıyor: ${song.title}`);
+
+        // yt-dlp-exec kullanımı (YouTube IP engellerini aşmak için daha etkilidir)
+        const output = ytdl.exec(song.url, {
+            output: '-',
+            format: 'bestaudio/best',
+            limitRate: '1M',
+        }, { stdio: ['ignore', 'pipe', 'ignore'] });
+
+        if (!output.stdout) {
+            throw new Error('Stream oluşturulamadı.');
+        }
+
+        const resource = createAudioResource(output.stdout, {
             inlineVolume: true
         });
 
@@ -192,6 +205,8 @@ async function playSong(guildId, interaction) {
 
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
+
+        console.log('✅ Şarkı çalmaya başladı.');
 
         // Not: Mikrofon ayarları joinVoiceChannel aşamasında zaten yapıldı.
         // rejoin() çağırmak bağlantı sorunlarına yol açabildiği için kaldırıldı.
@@ -214,7 +229,7 @@ async function playSong(guildId, interaction) {
     } catch (error) {
         console.error('❌ Stream hatası:', error);
         if (serverQueue.textChannel) {
-            serverQueue.textChannel.send('❌ Bu şarkı çalınamadı (YouTube IP engeli, yaş kısıtlaması veya bağlantı hatası olabilir). Kuyruktaki diğer şarkıya geçiliyor...').catch(() => { });
+            serverQueue.textChannel.send(`❌ Şarkı çalınamadı: ${error.message || 'Bilinmeyen hata'}. Sıradakine geçiliyor...`).catch(() => { });
         }
         serverQueue.songs.shift();
         playSong(guildId, interaction);
@@ -267,7 +282,16 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply();
 
         try {
-            const info = await play.video_basic_info(url);
+            let info;
+            try {
+                info = await play.video_basic_info(url);
+            } catch (e) {
+                console.log('⚠️ play-dl info alamadı, alternatif yöntem deneniyor...');
+                // Eğer play-dl hata verirse (link kontrolü hatası), yt-dlp ile temel bilgiyi almayı deneyebiliriz
+                // Ancak şimdilik play-dl'i daha dikkatli kullanacağız.
+                return interaction.editReply('❌ Şarkı bilgisi alınamadı! YouTube erişimi engellenmiş olabilir veya link hatalı.');
+            }
+
             const song = {
                 title: info.video_details.title,
                 url: url,
