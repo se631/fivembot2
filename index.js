@@ -138,7 +138,7 @@ const commands = [
     new SlashCommandBuilder().setName('devam').setDescription('Devam ettirir'),
     new SlashCommandBuilder().setName('atla').setDescription('Şarkı atlar'),
     new SlashCommandBuilder().setName('git').setDescription('Kanaldan çıkar'),
-    new SlashCommandBuilder().setName('ses').setDescription('Ses (1-100)').addIntegerOption(o => o.setName('seviye').setRequired(true)),
+    new SlashCommandBuilder().setName('ses').setDescription('Ses (1-100)').addIntegerOption(o => o.setName('seviye').setDescription('Ses seviyesi (1-100)').setRequired(true)),
     new SlashCommandBuilder().setName('kuyruk').setDescription('Listeyi gösterir'),
 ].map(c => c.toJSON());
 
@@ -256,3 +256,4 @@ client.on('interactionCreate', async (interaction) => {
 
 process.on('unhandledRejection', e => console.error('Hata:', e));
 client.login(process.env.DISCORD_TOKEN);
+
