@@ -1,5 +1,5 @@
 const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuilder } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, NoSubscriberBehavior, StreamType } = require('@discordjs/voice');
 const play = require('play-dl');
 const ytdl = require('yt-dlp-exec');
 const ytdlCore = require('@distube/ytdl-core');
@@ -111,6 +111,10 @@ client.once('clientReady', async () => {
                 });
 
                 console.log(`🔇 Bekleme kanalına katıldı: #${channel.name} (Mikrofon açık, kulaklık kapalı)`);
+
+                connection.on('stateChange', (oldState, newState) => {
+                    console.log(`🌐 [Bağlantı] ${oldState.status} -> ${newState.status}`);
+                });
 
                 connection.on(VoiceConnectionStatus.Disconnected, async () => {
                     // Eğer aktif bir müzik kuyruğu varsa, bekleme kanalına zorla döndürme
@@ -331,7 +335,11 @@ client.on('interactionCreate', async (interaction) => {
 
             console.log(`🎵 ${voiceChannel.name} kanalında çalmaya başlanıyor...`);
 
-            const player = createAudioPlayer();
+            const player = createAudioPlayer({
+                behaviors: {
+                    noSubscriber: NoSubscriberBehavior.Play,
+                },
+            });
 
             // Player durumlarını ve hataları detaylı takip et
             player.on('stateChange', (oldState, newState) => {
@@ -356,7 +364,18 @@ client.on('interactionCreate', async (interaction) => {
             queue.set(guild.id, queueData);
 
             await interaction.editReply(`🎵 Çalınıyor: **${song.title}** (${song.duration})`);
-            playSong(guild.id, interaction);
+
+            // Bağlantının hazır olmasını bekle
+            try {
+                await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+                console.log('✅ Bağlantı hazır, çalma başlatılıyor...');
+                playSong(guild.id, interaction);
+            } catch (error) {
+                console.error('❌ Bağlantı hazır olamadı:', error);
+                await interaction.editReply('❌ Ses kanalına bağlanılamadı. Lütfen tekrar deneyin.');
+                connection.destroy();
+                queue.delete(guild.id);
+            }
 
         } catch (error) {
             console.error('❌ Şarkı bilgisi alma hatası:', error);
