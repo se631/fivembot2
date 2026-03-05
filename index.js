@@ -46,11 +46,14 @@ function manageVoiceConnection(channel) {
     const resetTimer = setTimeout(() => {
         if (connection.state.status !== VoiceConnectionStatus.Ready &&
             connection.state.status !== VoiceConnectionStatus.Destroyed) {
-            console.log('⚠️ [BAĞLANTI] Gecikme yaşandı, yenileniyor...');
+            console.log('⚠️ [BAĞLANTI] Kanal hazır hale gelemedi, 5 saniye sonra tekrar denenecek...');
             try { connection.destroy(); } catch (e) { }
-            setTimeout(() => manageVoiceConnection(channel), 3000);
+            setTimeout(() => {
+                const updatedChannel = channel.guild.channels.cache.get(channel.id);
+                if (updatedChannel) manageVoiceConnection(updatedChannel);
+            }, 5000);
         }
-    }, 12000);
+    }, 20000); // 15 saniyeden 20 saniyeye çıkarıldı
 
     connection.on('stateChange', (o, n) => {
         if (n.status === VoiceConnectionStatus.Ready) {
@@ -69,8 +72,13 @@ async function playSong(guildId) {
 
     const song = serverQueue.songs[0];
     try {
-        console.log(`📡 Yayında: ${song.title}`);
-        const stream = await play.stream(song.url, { discordPlayerCompatibility: true, quality: 2 });
+        console.log(`📡 Yayına hazırlanıyor: ${song.title}`);
+        // URL'yi temizle ve play-dl'e gönder
+        const stream = await play.stream(song.url, {
+            discordPlayerCompatibility: true,
+            quality: 2,
+            seek: 0
+        });
         const resource = createAudioResource(stream.stream, { inputType: stream.type, inlineVolume: true });
         resource.volume.setVolume(serverQueue.volume / 100);
         serverQueue.resource = resource;
@@ -129,18 +137,18 @@ client.once('ready', async () => {
         console.log('✅ Komutlar kayıt edildi.');
     } catch (e) { }
 
-    // GECİKMELİ ODADAN BAŞLATMA
+    // GECİKMELİ ODADAN BAŞLATMA (Bot tam otursun)
     setTimeout(async () => {
         const wCID = process.env.WAIT_CHANNEL_ID;
         const wGID = process.env.WAIT_GUILD_ID;
         if (wCID && wGID) {
             try {
-                const g = await client.guilds.fetch(wGID);
-                const c = await g.channels.fetch(wCID);
+                const g = client.guilds.cache.get(wGID) || await client.guilds.fetch(wGID);
+                const c = g.channels.cache.get(wCID) || await g.channels.fetch(wCID);
                 if (c) manageVoiceConnection(c);
-            } catch (e) { }
+            } catch (e) { console.log('❌ Başlangıç kanalı hatası:', e.message); }
         }
-    }, 6000);
+    }, 10000);
 });
 
 client.on('interactionCreate', async (interaction) => {
