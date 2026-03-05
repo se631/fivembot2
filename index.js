@@ -209,16 +209,18 @@ async function playSong(guildId, interaction) {
         }
 
         const resource = createAudioResource(output.stdout, {
+            inputType: StreamType.Arbitrary,
             inlineVolume: true
         });
 
         resource.volume.setVolume(serverQueue.volume / 100);
         serverQueue.resource = resource;
 
-        serverQueue.player.play(resource);
+        // Abone ol ve sonra çal (Sıralama önemlidir)
         serverQueue.connection.subscribe(serverQueue.player);
+        serverQueue.player.play(resource);
 
-        console.log(`✅ ${song.title} oynatılmaya başlandı. (yt-dlp)`);
+        console.log(`✅ ${song.title} oynatılmaya başlandı. (yt-dlp + FFmpeg)`);
 
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
             console.log('🎵 Şarkı bitti, sıradakine geçiliyor...');
@@ -361,6 +363,12 @@ client.on('interactionCreate', async (interaction) => {
             // Player durumlarını ve hataları detaylı takip et
             player.on('stateChange', (oldState, newState) => {
                 console.log(`🎵 [Player] ${oldState.status} -> ${newState.status}`);
+
+                // Eğer player kendi kendine duraklarda (autopaused), zorla devam ettir
+                if (newState.status === AudioPlayerStatus.Paused || newState.status === AudioPlayerStatus.AutoPaused) {
+                    console.log('⚠️ Player duraklatıldı, otomatik devam ettiriliyor...');
+                    player.unpause();
+                }
             });
 
             player.on('error', error => {
