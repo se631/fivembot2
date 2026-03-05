@@ -3,6 +3,7 @@ const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerSta
 const play = require('play-dl');
 const ytdl = require('yt-dlp-exec');
 const ytdlCore = require('@distube/ytdl-core');
+const ytdlNormal = require('ytdl-core');
 const stream = require('stream');
 
 // Railway ortam değişkenlerini doğrudan process.env üzerinden okuyoruz
@@ -76,7 +77,7 @@ async function registerCommands() {
 }
 
 // ─── Bot Hazır ───
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`✅ ${client.user.tag} olarak giriş yapıldı!`);
 
     // Streaming (Yayın) aktivitesi ayarla
@@ -183,33 +184,37 @@ async function playSong(guildId, interaction) {
     const song = serverQueue.songs[0];
 
     try {
-        console.log(`📡 Stream hazırlanıyor: ${song.title}`);
+        console.log(`📡 Stream hazırlanıyor (yt-dlp): ${song.title}`);
 
-        // ytdl-core-discord mantığında distube/ytdl-core kullanıyoruz
-        const stream = await ytdlCore(song.url, {
-            filter: 'audioonly',
-            quality: 'highestaudio',
-            highWaterMark: 1 << 25, // Buffer boyutunu artırarak takılmaları önleyelim
-            dlChunkSize: 0 // Chunking'i kapatarak akışı hızlandırabiliriz
-        });
+        // yt-dlp kullanarak akışı başlat (en güvenli yöntem)
+        const output = ytdl.exec(song.url, {
+            output: '-',
+            format: 'bestaudio/best',
+            limitRate: '1M',
+            noCheckCertificates: true,
+            noWarnings: true,
+            preferFreeFormats: true,
+            addHeader: [
+                'referer:https://www.youtube.com/',
+                'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ]
+        }, { stdio: ['ignore', 'pipe', 'ignore'] });
 
-        const resource = createAudioResource(stream, {
+        if (!output.stdout) {
+            throw new Error('Stream çıktısı alınamadı.');
+        }
+
+        const resource = createAudioResource(output.stdout, {
             inlineVolume: true
         });
 
-        // Ses seviyesi ayarla
         resource.volume.setVolume(serverQueue.volume / 100);
         serverQueue.resource = resource;
 
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
-        console.log(`✅ ${song.title} için player.play() çağrıldı.`);
-
-        // Player durumlarını takip et
-        serverQueue.player.on('stateChange', (oldState, newState) => {
-            console.log(`🎵 Player durumu değişti: ${oldState.status} -> ${newState.status}`);
-        });
+        console.log(`✅ ${song.title} oynatılmaya başlandı. (yt-dlp)`);
 
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
             console.log('🎵 Şarkı bitti, sıradakine geçiliyor...');
@@ -229,7 +234,7 @@ async function playSong(guildId, interaction) {
     } catch (error) {
         console.error('❌ Stream hatası:', error);
         if (serverQueue.textChannel) {
-            serverQueue.textChannel.send(`❌ Şarkı çalınamadı: ${error.message || 'Bilinmeyen hata'}. Sıradakine geçiliyor...`).catch(() => { });
+            serverQueue.textChannel.send(`❌ Şarkı çalınamadı: ${error.message}. Sıradakine geçiliyor...`).catch(() => { });
         }
         serverQueue.songs.shift();
         playSong(guildId, interaction);
@@ -287,13 +292,18 @@ client.on('interactionCreate', async (interaction) => {
                 // play-dl yerine distube ytdl-core kullanıyoruz (bilgi almak için daha stabil)
                 info = await ytdlCore.getBasicInfo(url);
             } catch (e) {
-                console.log('⚠️ Bilgi alma hatası:', e.message);
-                return interaction.editReply(`❌ Şarkı bilgisi alınamadı! Hata: ${e.message}`);
+                console.log('⚠️ distube ytdl-core hatası, ytdl-core normal deneniyor...');
+                try {
+                    info = await ytdlNormal.getBasicInfo(url);
+                } catch (e2) {
+                    console.error('❌ Bilgi alma hatası:', e2.message);
+                    return interaction.editReply(`❌ Şarkı bilgisi alınamadı! Hata: ${e2.message}`);
+                }
             }
 
-            const title = info.videoDetails.title;
-            const durationArr = info.videoDetails.lengthSeconds;
-            const duration = new Date(durationArr * 1000).toISOString().substr(11, 8).replace(/^00:/, '');
+            const title = info.videoDetails?.title || 'Bilinmeyen Şarkı';
+            const durationSec = info.videoDetails?.lengthSeconds || 0;
+            const duration = new Date(durationSec * 1000).toISOString().substr(11, 8).replace(/^00:/, '');
 
             const song = {
                 title: title,
@@ -322,6 +332,19 @@ client.on('interactionCreate', async (interaction) => {
             console.log(`🎵 ${voiceChannel.name} kanalında çalmaya başlanıyor...`);
 
             const player = createAudioPlayer();
+
+            // Player durumlarını ve hataları detaylı takip et
+            player.on('stateChange', (oldState, newState) => {
+                console.log(`🎵 [Player] ${oldState.status} -> ${newState.status}`);
+            });
+
+            player.on('error', error => {
+                console.error('❌ [Player Hatası]:', error.message);
+                if (interaction.channel) {
+                    interaction.channel.send(`⚠️ Ses oynatıcı hatası: ${error.message}`);
+                }
+            });
+
             const queueData = {
                 connection,
                 player,
