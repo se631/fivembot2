@@ -1,10 +1,18 @@
 {
   "name": "mortex-music-bot",
   "version": "1.0.0",
+  "description": "Discord Music Bot - Developed By Mortex",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "keywords": [
+    "discord",
+    "music",
+    "bot"
+  ],
+  "author": "Mortex",
+  "license": "ISC",
   "engines": {
     "node": "22.x"
   },
