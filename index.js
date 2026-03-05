@@ -26,69 +26,55 @@ const client = new Client({
 });
 
 // ─── Global Değişkenler ───
-const queue = new Map(); // Her sunucu için ayrı kuyruk verisi
+const queue = new Map();
 
 /**
- * SES KANALINA BAĞLANMA (GELİŞMİŞ)
- * Signalling/Connecting döngülerini kırmak için bağlantıyı yönetir.
+ * SES KANALINA BAĞLANMA (DÖNGÜ KIRICI SİSTEM)
+ * Railway üzerindeki Signalling Loop hatasını aşmak için tasarlanmıştır.
  */
 function manageVoiceConnection(channel) {
     const guildId = channel.guild.id;
-
-    // Mevcut bir bağlantı olup olmadığını kontrol et
     let connection = getVoiceConnection(guildId, client.user.id);
 
+    // Eğer zaten bağlıysa ve kanal farklıysa eskiyi tamamen temizle
     if (connection) {
-        // Eğer zaten bağlıysa ve kanal farklıysa kanalı değiştir
         if (connection.joinConfig.channelId !== channel.id) {
-            console.log(`🔄 Kanal değiştiriliyor: #${channel.name}`);
-            connection = joinVoiceChannel({
-                channelId: channel.id,
-                guildId: guildId,
-                adapterCreator: channel.guild.voiceAdapterCreator,
-                selfDeaf: true,
-                selfMute: false,
-                group: client.user.id
-            });
+            console.log(`🔄 [KANAL DEĞİŞİMİ] Eski bağlantı temizleniyor: #${channel.name}`);
+            connection.destroy();
+        } else {
+            return connection;
         }
-    } else {
-        // Yeni bağlantı oluştur
-        console.log(`🔌 Yeni bağlantı kuruluyor: #${channel.name}`);
-        connection = joinVoiceChannel({
-            channelId: channel.id,
-            guildId: guildId,
-            adapterCreator: channel.guild.voiceAdapterCreator,
-            selfDeaf: true,
-            selfMute: false,
-            group: client.user.id
-        });
     }
 
-    // Durum değişikliklerini ve hazır olma durumunu takip et
-    connection.removeAllListeners('stateChange'); // Eski dinleyicileri temizle
+    console.log(`🔌 [BAĞLANILIYOR] #${channel.name} kanalına giriş yapılıyor...`);
+    connection = joinVoiceChannel({
+        channelId: channel.id,
+        guildId: guildId,
+        adapterCreator: channel.guild.voiceAdapterCreator,
+        selfDeaf: true,
+        selfMute: false,
+    });
+
+    // DÖNGÜ KIRICI: Eğer 15 saniye içinde hazıra geçmezse bağlantıyı tazele
+    const loopTimeout = setTimeout(() => {
+        if (connection.state.status === VoiceConnectionStatus.Signalling ||
+            connection.state.status === VoiceConnectionStatus.Connecting) {
+            console.log('⚠️ [DÖNGÜ KIRICI] Sinyal aşamasında takıldı. Bağlantı sıfırlanıyor...');
+            connection.destroy();
+            setTimeout(() => manageVoiceConnection(channel), 1000); // 1 saniye sonra tekrar dene
+        }
+    }, 15000);
+
     connection.on('stateChange', (oldState, newState) => {
-        console.log(`🌐 [BAĞLANTI] ${oldState.status} -> ${newState.status}`);
+        console.log(`🌐 [DURUM] ${oldState.status} -> ${newState.status}`);
 
         if (newState.status === VoiceConnectionStatus.Ready) {
-            console.log('✅ [HAZIR] Ses sunucusuyla tam bağlantı kuruldu.');
+            clearTimeout(loopTimeout);
+            console.log('✅ [HAZIR] Ses aktarımı için el sıkışma tamamlandı!');
         }
 
-        // Eğer bağlantı koptuysa veya yok edildiyse kuyruğu kontrol et
         if (newState.status === VoiceConnectionStatus.Disconnected) {
-            console.log('⚠️ [UYARI] Bağlantı koptu, kurtarılmaya çalışılıyor...');
-            try {
-                Promise.race([
-                    entersState(connection, VoiceConnectionStatus.Signalling, 5000),
-                    entersState(connection, VoiceConnectionStatus.Connecting, 5000),
-                ]).catch(() => {
-                    if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-                        connection.destroy();
-                        console.log('❌ [HATA] Bağlantı kurtarılamadı ve yok edildi.');
-                    }
-                });
-            } catch (e) {
-                console.error('Bağlantı fail-safe hatası:', e);
-            }
+            console.log('⚠️ [AYRILDI] Bağlantı kesildi.');
         }
     });
 
@@ -96,70 +82,76 @@ function manageVoiceConnection(channel) {
 }
 
 /**
- * MÜZİK ÇALMA MANTIĞI
+ * ŞARKI OYNATMA (EN KARARLI YÖNTEM)
  */
 async function playSong(guildId, interaction) {
     const serverQueue = queue.get(guildId);
     if (!serverQueue || serverQueue.songs.length === 0) {
-        console.log('🎵 Kuyruk bitti.');
+        console.log('🎵 Liste tamamlandı.');
         return finalizeQueue(guildId);
     }
 
     const song = serverQueue.songs[0];
     try {
-        console.log(`📡 Yayına hazırlanıyor: ${song.title}`);
+        console.log(`📡 Stream Hazırlanıyor: ${song.title}`);
 
-        // yt-dlp ile en güvenli stream (Agent taklidi yaparak)
-        const output = ytdl.exec(song.url, {
-            output: '-',
-            format: 'bestaudio/best',
-            limitRate: '1M',
-            noCheckCertificates: true,
-            addHeader: [
-                'referer:https://www.youtube.com/',
-                'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-            ]
-        }, { stdio: ['ignore', 'pipe', 'ignore'] });
+        // @distube/ytdl-core kullanarak stream alalım (Railway için daha stabil)
+        const stream = await ytdlCore(song.url, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+            highWaterMark: 1 << 25, // 32MB Buffer
+            dlChunkSize: 0
+        });
 
-        if (!output.stdout) throw new Error('Yayın çıktısı alınamadı.');
-
-        const resource = createAudioResource(output.stdout, {
+        const resource = createAudioResource(stream, {
             inputType: StreamType.Arbitrary,
             inlineVolume: true
         });
 
         resource.volume.setVolume(serverQueue.volume / 100);
 
+        // Önce Player'ı başlat, sonra bağlantıya bağla
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
-        console.log(`✅ [OYNATILIYOR] ${song.title}`);
+        console.log(`✅ [OYNIYOR] ${song.title}`);
 
-        // Player olayları
+        // Olay dinleyicileri
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
-            console.log('⏭️ Şarkı bitti, sıradakine geçiliyor...');
+            console.log('⏭️ Şarkı bitti.');
             serverQueue.songs.shift();
             playSong(guildId, interaction);
         });
 
         serverQueue.player.once('error', error => {
-            console.error('❌ Player hatası:', error.message);
+            console.error('❌ Player Hatası:', error.message);
             serverQueue.songs.shift();
             playSong(guildId, interaction);
         });
 
     } catch (err) {
-        console.error('❌ Akış hatası:', err.message);
-        if (serverQueue.textChannel) {
-            serverQueue.textChannel.send(`⚠️ Şarkı başlatılamadı: ${err.message}`).catch(() => { });
+        console.error('❌ Akış Hatası:', err.message);
+        // Fallback: yt-dlp ile tekrar dene
+        try {
+            console.log('⚠️ Ytdl-core başarısız, yt-dlp ile son deneme yapılıyor...');
+            const output = ytdl.exec(song.url, {
+                output: '-', format: 'bestaudio/best',
+                addHeader: ['referer:https://www.youtube.com/']
+            }, { stdio: ['ignore', 'pipe', 'ignore'] });
+
+            const fallbackRes = createAudioResource(output.stdout, { inputType: StreamType.Arbitrary, inlineVolume: true });
+            fallbackRes.volume.setVolume(serverQueue.volume / 100);
+            serverQueue.player.play(fallbackRes);
+        } catch (e) {
+            if (serverQueue.textChannel) serverQueue.textChannel.send(`⚠️ Şarkı çalınamadı: ${err.message}`).catch(() => { });
+            serverQueue.songs.shift();
+            playSong(guildId, interaction);
         }
-        serverQueue.songs.shift();
-        playSong(guildId, interaction);
     }
 }
 
 /**
- * BEKLEME KANALINA DÖNÜŞ VEYA TEMİZLİK
+ * BEKLEME KANALINA DÖNÜŞ
  */
 async function finalizeQueue(guildId) {
     const serverQueue = queue.get(guildId);
@@ -174,66 +166,46 @@ async function finalizeQueue(guildId) {
                 console.log('🏠 Bekleme kanalına dönülüyor...');
                 manageVoiceConnection(channel);
             }
-        } catch (e) {
-            console.error('Bekleme kanalına dönüş hatası:', e);
-        }
+        } catch (e) { console.error('Geri dönüş hatası:', e); }
     } else {
-        if (serverQueue && serverQueue.connection) {
-            serverQueue.connection.destroy();
-        }
+        if (serverQueue && serverQueue.connection) serverQueue.connection.destroy();
     }
     queue.delete(guildId);
 }
 
-// ───Slash Komut Tanımları ───
+// ─── Slash Komutları ───
 const commands = [
-    new SlashBuilder('gel', 'Botu sese çağırır'),
-    new SlashBuilder('cal', 'YouTube linkini çalar', true),
-    new SlashBuilder('dur', 'Müziği duraklatır'),
-    new SlashBuilder('devam', 'Müziği devam ettirir'),
-    new SlashBuilder('atla', 'Sıradaki şarkıya geçer'),
-    new SlashBuilder('kuyruk', 'Listeyi gösterir'),
-    new SlashBuilder('ses', 'Sesi ayarlar (1-100)', false, true),
-    new SlashBuilder('git', 'Kanaldan çıkar'),
-];
+    new SlashCommandBuilder().setName('gel').setDescription('Botu sese çağırır'),
+    new SlashCommandBuilder().setName('cal').setDescription('Müzik çalar').addStringOption(o => o.setName('link').setDescription('YouTube Linki').setRequired(true)),
+    new SlashCommandBuilder().setName('dur').setDescription('Durdurur'),
+    new SlashCommandBuilder().setName('devam').setDescription('Devam ettirir'),
+    new SlashCommandBuilder().setName('atla').setDescription('Şarkıyı atlar'),
+    new SlashCommandBuilder().setName('kuyruk').setDescription('Listeyi gösterir'),
+    new SlashCommandBuilder().setName('ses').setDescription('Ses (1-100)').addIntegerOption(o => o.setName('seviye').setDescription('Seviye').setRequired(true).setMinValue(1).setMaxValue(100)),
+    new SlashCommandBuilder().setName('git').setDescription('Çıkış yapar'),
+].map(cmd => cmd.toJSON());
 
-function SlashBuilder(name, desc, hasLink = false, hasLevel = false) {
-    const b = new SlashCommandBuilder().setName(name).setDescription(desc);
-    if (hasLink) b.addStringOption(o => o.setName('link').setDescription('YouTube Linki').setRequired(true));
-    if (hasLevel) b.addIntegerOption(o => o.setName('seviye').setDescription('Ses Seviyesi').setRequired(true).setMinValue(1).setMaxValue(100));
-    return b.toJSON();
-}
-
-// ─── Bot Olayları ───
+// ─── Bot Events ───
 client.once('clientReady', async () => {
     console.log(`🚀 [AKTİF] ${client.user.tag}`);
+    client.user.setPresence({ activities: [{ name: 'Developed By Mortex', type: ActivityType.Streaming, url: 'https://twitch.tv/mortex' }], status: 'online' });
 
-    // Status Ayarı
-    client.user.setPresence({
-        activities: [{ name: 'Developed By Mortex', type: ActivityType.Streaming, url: 'https://twitch.tv/mortex' }],
-        status: 'online'
-    });
-
-    // Slash Komut Kaydı
+    // Komutları kaydet
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-    try {
-        console.log('🔄 Komutlar kaydediliyor...');
-        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('✅ Komutlar hazır.');
-    } catch (e) { console.error('Komut kayıt hatası:', e); }
+    try { await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands }); console.log('✅ Komutlar hazır.'); } catch (e) { console.error(e); }
 
-    // Başlangıçta bekleme kanalına gir
-    const wCID = process.env.WAIT_CHANNEL_ID;
-    const wGID = process.env.WAIT_GUILD_ID;
-    if (wCID && wGID) {
-        setTimeout(async () => {
+    // Başlangıç bekleme kanalına gir (5 saniye sonra)
+    setTimeout(async () => {
+        const wCID = process.env.WAIT_CHANNEL_ID;
+        const wGID = process.env.WAIT_GUILD_ID;
+        if (wCID && wGID) {
             try {
                 const g = await client.guilds.fetch(wGID);
                 const c = await g.channels.fetch(wCID);
                 if (c && c.isVoiceBased()) manageVoiceConnection(c);
-            } catch (e) { console.error('Başlangıç sese bağlanma hatası:', e); }
-        }, 5000); // 5 saniye bekleme (Gateway stabilizasyonu için)
-    }
+            } catch (e) { console.error('Başlangıç hatası:', e); }
+        }
+    }, 5000);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -242,22 +214,18 @@ client.on('interactionCreate', async (interaction) => {
 
     if (commandName === 'cal') {
         const voiceChannel = member.voice.channel;
-        if (!voiceChannel) return interaction.reply({ content: '❌ Önce bir ses kanalına girmelisin!', ephemeral: true });
+        if (!voiceChannel) return interaction.reply({ content: '❌ Sese girmelisin!', ephemeral: true });
 
         const url = interaction.options.getString('link');
-        if (!play.yt_validate(url)) return interaction.reply({ content: '❌ Geçersiz YouTube linki!', ephemeral: true });
+        if (!play.yt_validate(url)) return interaction.reply({ content: '❌ Geçersiz link!', ephemeral: true });
 
         await interaction.deferReply();
 
         try {
-            console.log('📡 Şarkı bilgisi alınıyor (Fallback sistemi aktif)...');
+            console.log('📡 Şarkı bilgisi alınıyor...');
             let info;
-            try {
-                info = await ytdlCore.getBasicInfo(url);
-            } catch (e1) {
-                console.log('⚠️ ytdl-core başarısız, ytdl-normal deneniyor...');
-                info = await ytdlNormal.getBasicInfo(url);
-            }
+            try { info = await ytdlCore.getBasicInfo(url); }
+            catch { info = await ytdlNormal.getBasicInfo(url); }
 
             const song = {
                 title: info.videoDetails.title,
@@ -271,24 +239,20 @@ client.on('interactionCreate', async (interaction) => {
                 const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
 
                 player.on('stateChange', (o, n) => {
-                    console.log(`🎵 [PLAYER] ${o.status} -> ${n.status}`);
-                    if (n.status === AudioPlayerStatus.AutoPaused) {
-                        console.log('⚠️ Autopaused kilitlendi, zorla devam ettiriliyor...');
-                        player.unpause();
-                    }
+                    if (n.status === AudioPlayerStatus.AutoPaused) player.unpause();
                 });
 
                 serverQueue = { connection, player, songs: [song], volume: 50, textChannel: channel };
                 queue.set(guild.id, serverQueue);
 
-                await interaction.editReply(`🎵 Çalmaya hazırlanıyor: **${song.title}**`);
+                await interaction.editReply(`🎵 Çalınıyor: **${song.title}**`);
 
-                // Bağlantının hazır olmasını güvenli bir şekilde bekle
+                // Bağlantının hazır olmasını esnek bekle
                 try {
                     await entersState(connection, VoiceConnectionStatus.Ready, 15000);
                     playSong(guild.id, interaction);
-                } catch (e) {
-                    console.log('⚠️ Bağlantı hazır olma süresi aşıldı, yine de çalma deneniyor...');
+                } catch {
+                    console.log('⚠️ Hazır olması beklemeden çalma deneniyor...');
                     playSong(guild.id, interaction);
                 }
             } else {
@@ -296,42 +260,43 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.editReply(`📝 Kuyruğa eklendi: **${song.title}**`);
             }
         } catch (e) {
-            console.error('❌ CAL Hatası:', e.message);
-            await interaction.editReply(`❌ Şarkı bilgisi alınamadı. (YouTube kısıtlaması).`);
+            console.error('❌ Hata:', e.message);
+            await interaction.editReply(`❌ Şarkı bilgisi alınamadı (YouTube Engeli).`);
         }
     }
 
     if (commandName === 'dur') {
         const q = queue.get(guild.id);
         if (q) { q.player.pause(); await interaction.reply('⏸️ Durduruldu.'); }
-        else await interaction.reply({ content: '❌ Çalan bir şey yok.', ephemeral: true });
     }
 
     if (commandName === 'devam') {
         const q = queue.get(guild.id);
         if (q) { q.player.unpause(); await interaction.reply('▶️ Devam ediyor.'); }
-        else await interaction.reply({ content: '❌ Çalan bir şey yok.', ephemeral: true });
     }
 
     if (commandName === 'atla') {
         const q = queue.get(guild.id);
         if (q) { q.player.stop(); await interaction.reply('⏭️ Atlandı.'); }
-        else await interaction.reply({ content: '❌ Atlanacak bir şey yok.', ephemeral: true });
     }
 
     if (commandName === 'git') {
         const q = queue.get(guild.id);
-        if (q) {
-            q.songs = [];
-            q.player.stop();
-            q.connection.destroy();
-            queue.delete(guild.id);
-        }
+        if (q) { q.songs = []; q.player.stop(); q.connection.destroy(); queue.delete(guild.id); }
         await interaction.reply('👋 Çıkış yapıldı.');
         setTimeout(() => finalizeQueue(guild.id), 2000);
     }
+
+    if (commandName === 'ses') {
+        const q = queue.get(guild.id);
+        const voltip = interaction.options.getInteger('seviye');
+        if (q) {
+            q.volume = voltip;
+            if (q.resource && q.resource.volume) q.resource.volume.setVolume(voltip / 100);
+            await interaction.reply(`🔊 Ses: %${voltip}`);
+        }
+    }
 });
 
-// ─── Fail-Safe ───
-process.on('unhandledRejection', e => console.error('❌ Yakalanmamış Hata:', e));
+process.on('unhandledRejection', e => console.error(e));
 client.login(process.env.DISCORD_TOKEN);
