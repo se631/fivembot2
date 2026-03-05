@@ -291,29 +291,46 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply();
 
         try {
-            let info;
+            let songInfo;
             try {
-                // play-dl yerine distube ytdl-core kullanıyoruz (bilgi almak için daha stabil)
-                info = await ytdlCore.getBasicInfo(url);
+                console.log('📡 Bilgiler yt-dlp ile alınıyor...');
+                // yt-dlp ile metadata al (En güvenli yöntem)
+                const metadata = await ytdl(url, {
+                    dumpSingleJson: true,
+                    noCheckCertificates: true,
+                    noWarnings: true,
+                    preferFreeFormats: true,
+                    addHeader: [
+                        'referer:https://www.youtube.com/',
+                        'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    ]
+                });
+
+                songInfo = {
+                    title: metadata.title || 'Bilinmeyen Şarkı',
+                    duration: metadata.duration_string || '00:00',
+                    thumbnail: metadata.thumbnail || ''
+                };
             } catch (e) {
-                console.log('⚠️ distube ytdl-core hatası, ytdl-core normal deneniyor...');
+                console.log('⚠️ yt-dlp info hatası, ytdl-core deneniyor...', e.message);
                 try {
-                    info = await ytdlNormal.getBasicInfo(url);
+                    const info = await ytdlCore.getBasicInfo(url);
+                    songInfo = {
+                        title: info.videoDetails.title,
+                        duration: new Date(info.videoDetails.lengthSeconds * 1000).toISOString().substr(11, 8).replace(/^00:/, ''),
+                        thumbnail: info.videoDetails.thumbnails[0]?.url
+                    };
                 } catch (e2) {
                     console.error('❌ Bilgi alma hatası:', e2.message);
-                    return interaction.editReply(`❌ Şarkı bilgisi alınamadı! Hata: ${e2.message}`);
+                    return interaction.editReply(`❌ Şarkı bilgisi alınamadı! YouTube şu an bu botu engelliyor olabilir. Hata: ${e2.message}`);
                 }
             }
 
-            const title = info.videoDetails?.title || 'Bilinmeyen Şarkı';
-            const durationSec = info.videoDetails?.lengthSeconds || 0;
-            const duration = new Date(durationSec * 1000).toISOString().substr(11, 8).replace(/^00:/, '');
-
             const song = {
-                title: title,
+                title: songInfo.title,
                 url: url,
-                duration: duration,
-                thumbnail: info.videoDetails.thumbnails[0]?.url
+                duration: songInfo.duration,
+                thumbnail: songInfo.thumbnail
             };
 
             const serverQueue = queue.get(guild.id);
