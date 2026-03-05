@@ -183,20 +183,17 @@ async function playSong(guildId, interaction) {
     const song = serverQueue.songs[0];
 
     try {
-        console.log(`📡 Stream başlatılıyor: ${song.title}`);
+        console.log(`📡 Stream hazırlanıyor: ${song.title}`);
 
-        // yt-dlp-exec kullanımı (YouTube IP engellerini aşmak için daha etkilidir)
-        const output = ytdl.exec(song.url, {
-            output: '-',
-            format: 'bestaudio/best',
-            limitRate: '1M',
-        }, { stdio: ['ignore', 'pipe', 'ignore'] });
+        // ytdl-core-discord mantığında distube/ytdl-core kullanıyoruz
+        const stream = await ytdlCore(song.url, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+            highWaterMark: 1 << 25, // Buffer boyutunu artırarak takılmaları önleyelim
+            dlChunkSize: 0 // Chunking'i kapatarak akışı hızlandırabiliriz
+        });
 
-        if (!output.stdout) {
-            throw new Error('Stream oluşturulamadı.');
-        }
-
-        const resource = createAudioResource(output.stdout, {
+        const resource = createAudioResource(stream, {
             inlineVolume: true
         });
 
@@ -207,10 +204,12 @@ async function playSong(guildId, interaction) {
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
-        console.log('✅ Şarkı çalmaya başladı.');
+        console.log(`✅ ${song.title} için player.play() çağrıldı.`);
 
-        // Not: Mikrofon ayarları joinVoiceChannel aşamasında zaten yapıldı.
-        // rejoin() çağırmak bağlantı sorunlarına yol açabildiği için kaldırıldı.
+        // Player durumlarını takip et
+        serverQueue.player.on('stateChange', (oldState, newState) => {
+            console.log(`🎵 Player durumu değişti: ${oldState.status} -> ${newState.status}`);
+        });
 
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
             console.log('🎵 Şarkı bitti, sıradakine geçiliyor...');
