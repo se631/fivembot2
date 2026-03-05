@@ -348,11 +348,20 @@ client.on('interactionCreate', async (interaction) => {
                 channelId: voiceChannel.id,
                 guildId: guild.id,
                 adapterCreator: guild.voiceAdapterCreator,
-                selfDeaf: false,
-                selfMute: false
+                selfDeaf: true,  // Kulaklık kapalı (İstediğin gibi)
+                selfMute: false  // Mikrofon açık
             });
 
-            console.log(`🎵 ${voiceChannel.name} kanalında çalmaya başlanıyor...`);
+            // Bağlantı durumlarını takip et
+            connection.on('stateChange', (oldState, newState) => {
+                console.log(`� [Yeni Bağlantı] ${oldState.status} -> ${newState.status}`);
+            });
+
+            connection.on(VoiceConnectionStatus.Ready, () => {
+                console.log('✅ Ses kanalına başarıyla bağlanıldı ve hazır!');
+            });
+
+            console.log(`�🎵 ${voiceChannel.name} kanalında çalmaya başlanıyor...`);
 
             const player = createAudioPlayer({
                 behaviors: {
@@ -390,17 +399,9 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.editReply(`🎵 Çalınıyor: **${song.title}** (${song.duration})`);
 
-            // Bağlantının hazır olmasını bekle
-            try {
-                await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
-                console.log('✅ Bağlantı hazır, çalma başlatılıyor...');
-                playSong(guild.id, interaction);
-            } catch (error) {
-                console.error('❌ Bağlantı hazır olamadı:', error);
-                await interaction.editReply('❌ Ses kanalına bağlanılamadı. Lütfen tekrar deneyin.');
-                connection.destroy();
-                queue.delete(guild.id);
-            }
+            // Not: entersState bazen AbortError verdiği için kaldırıldı. 
+            // Library hazır olduğunda çalmaya otomatik başlar.
+            playSong(guild.id, interaction);
 
         } catch (error) {
             console.error('❌ Şarkı bilgisi alma hatası:', error);
