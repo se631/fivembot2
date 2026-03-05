@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
+    "@distube/ytdl-core": "^4.16.4",
     "discord.js": "^14.16.3",
     "libsodium-wrappers": "^0.8.2",
     "opusscript": "^0.0.8",
