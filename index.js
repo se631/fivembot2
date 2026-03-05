@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuild
 const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
 const play = require('play-dl');
 const ytdl = require('yt-dlp-exec');
+const ytdlCore = require('@distube/ytdl-core');
 const stream = require('stream');
 
 // Railway ortam değişkenlerini doğrudan process.env üzerinden okuyoruz
@@ -284,19 +285,22 @@ client.on('interactionCreate', async (interaction) => {
         try {
             let info;
             try {
-                info = await play.video_basic_info(url);
+                // play-dl yerine distube ytdl-core kullanıyoruz (bilgi almak için daha stabil)
+                info = await ytdlCore.getBasicInfo(url);
             } catch (e) {
-                console.log('⚠️ play-dl info alamadı, alternatif yöntem deneniyor...');
-                // Eğer play-dl hata verirse (link kontrolü hatası), yt-dlp ile temel bilgiyi almayı deneyebiliriz
-                // Ancak şimdilik play-dl'i daha dikkatli kullanacağız.
-                return interaction.editReply('❌ Şarkı bilgisi alınamadı! YouTube erişimi engellenmiş olabilir veya link hatalı.');
+                console.log('⚠️ Bilgi alma hatası:', e.message);
+                return interaction.editReply(`❌ Şarkı bilgisi alınamadı! Hata: ${e.message}`);
             }
 
+            const title = info.videoDetails.title;
+            const durationArr = info.videoDetails.lengthSeconds;
+            const duration = new Date(durationArr * 1000).toISOString().substr(11, 8).replace(/^00:/, '');
+
             const song = {
-                title: info.video_details.title,
+                title: title,
                 url: url,
-                duration: info.video_details.durationRaw,
-                thumbnail: info.video_details.thumbnails[0]?.url
+                duration: duration,
+                thumbnail: info.videoDetails.thumbnails[0]?.url
             };
 
             const serverQueue = queue.get(guild.id);
