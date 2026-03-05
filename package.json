@@ -1,32 +1,18 @@
 {
   "name": "mortex-music-bot",
   "version": "1.0.0",
-  "description": "Discord YouTube Müzik Botu - Developed By Mortex",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "echo \"No test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [
-    "discord",
-    "music",
-    "bot",
-    "youtube"
-  ],
-  "author": "Mortex",
-  "license": "ISC",
-  "type": "commonjs",
   "engines": {
     "node": "22.x"
   },
   "dependencies": {
     "@discordjs/voice": "0.18.0",
-    "@distube/ytdl-core": "4.16.4",
     "discord.js": "14.17.3",
-    "libsodium-wrappers": "0.8.2",
-    "opusscript": "0.0.8",
     "play-dl": "1.9.7",
-    "yt-dlp-exec": "1.0.2",
-    "ytdl-core": "4.11.5"
+    "libsodium-wrappers": "0.8.2",
+    "opusscript": "0.0.8"
   }
 }
