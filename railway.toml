@@ -2,7 +2,7 @@
 builder = "NIXPACKS"
 
 [build.nixpacksPlan.phases.setup]
-nixPkgs = ["nodejs", "npm", "ffmpeg"]
+nixPkgs = ["nodejs", "ffmpeg"]
 
 [deploy]
 startCommand = "node index.js"
